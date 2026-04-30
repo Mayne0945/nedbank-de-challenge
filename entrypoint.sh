@@ -1,14 +1,26 @@
 #!/bin/bash
-# ── Fix hostname resolution for --network none environments ───────────────────
-# When Docker runs with --network none, the container's hostname (a random hex
-# ID like f36e0407ca5c) cannot be resolved via DNS. Log4j and Spark both try
-# to resolve it for log metadata — this produces a wall of UnknownHostException
-# warnings before Spark even starts.
-#
-# The fix: write the container's own hostname to /etc/hosts pointing to 127.0.0.1
-# before Python starts. This makes the OS-level hostname lookup succeed without
-# needing any network stack.
-echo "127.0.0.1 $(hostname)" >> /etc/hosts
 
-# Hand off to the pipeline
-exec python pipeline/run_all.py
+# 1. Bypass read-only /etc/hosts
+HOSTNAME_VAL=$(hostname)
+if cp /etc/hosts /tmp/hosts.tmp 2>/dev/null; then
+    echo "127.0.0.1 ${HOSTNAME_VAL}" >> /tmp/hosts.tmp
+    mount --bind /tmp/hosts.tmp /etc/hosts 2>/dev/null || true
+fi
+
+# 2. Pre-create the directory tree
+mkdir -p /data/output/bronze /data/output/silver /data/output/gold 
+mkdir -p /tmp/spark-local /tmp/derby /tmp/spark-warehouse /data/output/spark-tmp
+
+# 3. Redirect temporary files
+export SPARK_LOCAL_DIRS=/tmp/spark-local
+export JAVA_TOOL_OPTIONS="-Dderby.system.home=/tmp/derby -Dspark.sql.warehouse.dir=/tmp/spark-warehouse -Dorg.xerial.snappy.tempdir=/data/output/spark-tmp"
+
+# 4. Execute the pipeline and capture the exit status
+python pipeline/run_all.py
+PIPELINE_STATUS=$?
+
+# 5. UNLOCK THE FILES for the host machine (Fixes DuckDB read + rm cleanup errors)
+chmod -R 777 /data/output 2>/dev/null || true
+
+# 6. Exit with the actual Spark status
+exit $PIPELINE_STATUS

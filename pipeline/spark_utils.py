@@ -25,7 +25,6 @@ def get_spark(cfg: dict) -> SparkSession:
         .master(spark_cfg.get("master", "local[2]"))
         .appName(spark_cfg.get("app_name", "nedbank-de-pipeline"))
         # Delta JARs are in pyspark/jars/ — loaded automatically by Spark.
-        # No spark.jars or spark.jars.packages needed.
         .config("spark.sql.extensions",
                 "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog",
@@ -34,7 +33,15 @@ def get_spark(cfg: dict) -> SparkSession:
         .config("spark.driver.host",        "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.sql.shuffle.partitions", "8")
-        .config("spark.driver.memory",          "1500m")
+        # Scoring system runs with --memory=2g, not 4g
+        .config("spark.driver.memory",      "1200m")
+        # --read-only container: all Spark temp/local dirs must be under /tmp
+        # which is the only writable tmpfs (512MB) provided by the harness.
+        .config("spark.local.dir",          "/tmp/spark-local")
+        .config("spark.driver.extraJavaOptions",
+                "-Djava.io.tmpdir=/tmp")
+        .config("spark.executor.extraJavaOptions",
+                "-Djava.io.tmpdir=/tmp")
         .config("spark.databricks.delta.schema.autoMerge.enabled", "true")
         .getOrCreate()
     )
