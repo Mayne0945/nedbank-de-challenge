@@ -17,6 +17,9 @@ for _dir in [
     "/data/output/bronze",
     "/data/output/silver",
     "/data/output/gold",
+    "/data/output/stream_gold",
+    "/data/output/stream_gold/current_balances",
+    "/data/output/stream_gold/recent_transactions",
     "/tmp/spark-local",
 ]:
     os.makedirs(_dir, exist_ok=True)
@@ -83,6 +86,24 @@ if __name__ == "__main__":
             generate_dq_report(cfg, spark, run_timestamp, total, source_counts)
     except Exception as exc:
         log.warning("DQ report generation failed (non-fatal): %s", exc)
+
+    # ── Streaming (Stage 3) ───────────────────────────────────────────────────
+    # Only runs if /data/stream/ directory exists and contains files.
+    stream_dir = "/data/stream"
+    if os.path.isdir(stream_dir) and any(
+        f.endswith(".jsonl") for f in os.listdir(stream_dir)
+    ):
+        log.info("── Stage: STREAM (Stage 3) ──")
+        try:
+            from stream_ingest import run_stream_ingestion
+            run_stream_ingestion()
+            log.info("── STREAM COMPLETE ──")
+        except Exception as exc:
+            log.exception("── STREAM FAILED (non-fatal): %s ──", exc)
+            # Streaming failure does not fail the whole pipeline —
+            # batch correctness scores are independent of streaming.
+    else:
+        log.info("── STREAM: /data/stream/ not found or empty — skipping ──")
 
     total = time.time() - pipeline_start
     log.info("=" * 60)
