@@ -1,76 +1,87 @@
 # ============================================================
-# Data Quality Rules
-#
-# This file is REQUIRED from Stage 2 onward.
-# The scoring system checks that your pipeline reads DQ logic
-# from this file rather than hardcoding it in Python.
-#
-# Populate this file with the rules your transform.py applies
-# to flag records in the transactions Silver/Gold tables.
-#
-# Structure is flexible — design it to suit your implementation.
-# The example skeleton below shows one common pattern.
+# Data Quality Rules — Nedbank DE Challenge Stage 2
+# Pipeline reads all DQ logic from this file.
+# Changing a handling_action here changes pipeline behaviour
+# without modifying Python code.
 # ============================================================
 
-# ── Null checks ───────────────────────────────────────────────
-# Fields that must not be null. Records violating these rules
-# should receive dq_flag = "NULL_REQUIRED".
-#
-# null_checks:
-#   fact_transactions:
-#     - transaction_id
-#     - account_id
-#     - transaction_date
-#     - amount
-#     - transaction_type
-#     - currency
-#     - channel
+rules:
 
-# ── Type checks ───────────────────────────────────────────────
-# Fields with expected types. Records where values cannot be
-# cast should receive dq_flag = "TYPE_MISMATCH".
-#
-# type_checks:
-#   fact_transactions:
-#     amount: decimal
-#     transaction_date: date
-#     transaction_timestamp: timestamp
+  DUPLICATE_DEDUPED:
+    affected_file: transactions.jsonl
+    detection: duplicate_transaction_id
+    handling_action: QUARANTINE
+    description: >
+      Duplicate transaction events with the same transaction_id but
+      marginally different timestamps. Keep the first occurrence
+      (lowest ingestion order); quarantine subsequent duplicates.
+    primary_key: transaction_id
 
-# ── Value domain checks ───────────────────────────────────────
-# Fields constrained to a fixed set of values.
-#
-# domain_checks:
-#   transaction_type:
-#     allowed: [DEBIT, CREDIT, FEE, REVERSAL]
-#     dq_flag: TYPE_MISMATCH
-#   channel:
-#     allowed: [POS, APP, ATM, EFT, USSD, INTERNAL]
-#     dq_flag: TYPE_MISMATCH
+  ORPHANED_ACCOUNT:
+    affected_file: transactions.jsonl
+    detection: account_id_not_in_accounts
+    handling_action: FLAG
+    description: >
+      Transactions referencing an account_id with no matching record
+      in accounts.csv. Cannot be resolved to a customer. Retained in
+      Silver with dq_flag set; excluded from Gold fact table joins.
+    reference_table: accounts
+    reference_field: account_id
 
-# ── Currency normalisation ────────────────────────────────────
-# Source data may contain currency variants. All values must be
-# standardised to "ZAR" in the Gold output. Records with
-# non-standard source values should receive dq_flag = "CURRENCY_VARIANT".
-#
-# currency_normalisation:
-#   target_value: ZAR
-#   flag_variants: true
+  TYPE_MISMATCH:
+    affected_file: transactions.jsonl
+    detection: amount_not_numeric
+    handling_action: NORMALISE
+    description: >
+      The amount field is delivered as a string instead of a numeric
+      type. Cast to DECIMAL(18,2); flag the record if cast fails.
+    affected_field: amount
+    expected_type: decimal
 
-# ── Date format checks ────────────────────────────────────────
-# Date fields must conform to ISO format (YYYY-MM-DD).
-# Records with unrecognised date formats should receive
-# dq_flag = "DATE_FORMAT".
-#
-# date_format_checks:
-#   - transaction_date
-#   - last_activity_date
+  DATE_FORMAT:
+    affected_files:
+      - transactions.jsonl
+      - accounts.csv
+      - customers.csv
+    detection: non_iso_date_format
+    handling_action: NORMALISE
+    description: >
+      Date fields contain mixed formats: YYYY-MM-DD (standard),
+      DD/MM/YYYY, or Unix epoch integers. Normalise all to ISO
+      YYYY-MM-DD via coalesce chain. Flag records where source
+      format was not YYYY-MM-DD.
+    affected_fields:
+      - transaction_date
+      - open_date
+      - dob
+      - last_activity_date
+    accepted_formats:
+      - "yyyy-MM-dd"
+      - "dd/MM/yyyy"
+      - epoch_seconds
 
-# ── Referential integrity checks ─────────────────────────────
-# Transactions referencing an account_id not present in
-# dim_accounts should receive dq_flag = "ORPHANED_ACCOUNT".
-#
-# referential_integrity:
-#   fact_transactions:
-#     - field: account_id
-#       references: dim_accounts.account_id
-#       dq_flag: ORPHANED_ACCOUNT
+  CURRENCY_VARIANT:
+    affected_file: transactions.jsonl
+    detection: currency_not_ZAR
+    handling_action: NORMALISE
+    description: >
+      The currency field contains non-standard representations of
+      South African Rand. Normalise all variants to "ZAR".
+      Flag the record so the variant is traceable.
+    affected_field: currency
+    target_value: ZAR
+    known_variants:
+      - "R"
+      - "rands"
+      - "710"
+      - "zar"
+
+  NULL_REQUIRED:
+    affected_file: accounts.csv
+    detection: null_primary_key
+    handling_action: QUARANTINE
+    description: >
+      The account_id primary key field is null. Records with no valid
+      identifier cannot be loaded into Silver or Gold. Quarantine and
+      log; do not silently drop.
+    affected_field: account_id

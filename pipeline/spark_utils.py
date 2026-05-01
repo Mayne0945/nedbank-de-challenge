@@ -35,6 +35,10 @@ def get_spark(cfg: dict) -> SparkSession:
         .config("spark.sql.shuffle.partitions", "8")
         # Scoring system runs with --memory=2g, not 4g
         .config("spark.driver.memory",      "1200m")
+        # CORRECTED: return NULL instead of throwing on unparseable dates.
+        # Stage 2 data contains datetime strings (e.g. '1979-03-17 22:00:00')
+        # in date-only fields — CORRECTED lets our coalesce chain handle them.
+        .config("spark.sql.legacy.timeParserPolicy", "CORRECTED")
         # --read-only container: all Spark temp/local dirs must be under /tmp
         # which is the only writable tmpfs (512MB) provided by the harness.
         .config("spark.local.dir",          "/tmp/spark-local")
